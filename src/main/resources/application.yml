@@ -1,0 +1,61 @@
+server:
+  port: 8443
+  ssl:
+    enabled: true
+    key-store: classpath:server.jks
+    key-store-type: PKCS12
+    key-store-password: ${SERVER_KEYSTORE_PASSWORD}
+    key-alias: ${SERVER_KEY_ALIAS}
+
+spring:
+  config:
+    import: optional:file:.env[.properties]
+
+  datasource:
+    url: ${DB_URL}
+    username: ${DB_USERNAME}
+    password: ${DB_PASSWORD}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 2
+
+  jpa:
+    hibernate:
+      ddl-auto: update
+    open-in-view: false
+    show-sql: true
+    properties:
+      hibernate.format_sql: true
+      hibernate.jdbc.time_zone: UTC
+
+  sql:
+    init:
+      mode: never
+
+  flyway:
+    enabled: false
+
+logging:
+  level:
+    org.hibernate.SQL: DEBUG
+    org.hibernate.orm.jdbc.bind: TRACE
+    org.springframework.security: DEBUG
+
+jwt:
+  secret: ${JWT_SECRET}
+  accessExpirationMs: ${JWT_ACCESS_EXPIRATION_MS:900000}
+  refreshExpirationMs: ${JWT_REFRESH_EXPIRATION_MS:1209600000}
+
+app:
+  jwt:
+    refresh-ttl-days: 30
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: never
