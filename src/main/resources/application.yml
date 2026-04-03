@@ -51,6 +51,13 @@ app:
   jwt:
     refresh-ttl-days: 30
 
+signature:
+  key-store-path: classpath:signing.jks
+  key-store-type: JKS
+  key-store-password: ${SIGNATURE_KEYSTORE_PASSWORD}
+  key-alias: ${SIGNATURE_KEY_ALIAS}
+  key-password: ${SIGNATURE_KEY_PASSWORD}
+
 management:
   endpoints:
     web:

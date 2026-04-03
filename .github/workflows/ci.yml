@@ -1,0 +1,66 @@
+name: ZIoVPO CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    env:
+      DB_URL: ${{ secrets.DB_URL }}
+      DB_USERNAME: ${{ secrets.DB_USERNAME }}
+      DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+      JWT_SECRET: ${{ secrets.JWT_SECRET }}
+
+      SERVER_KEYSTORE_PASSWORD: ${{ secrets.SERVER_KEYSTORE_PASSWORD }}
+      SERVER_KEY_ALIAS: ${{ secrets.SERVER_KEY_ALIAS }}
+      SERVER_KEYSTORE_B64: ${{ secrets.SERVER_KEYSTORE_B64 }}
+
+      SIGNATURE_KEYSTORE_PASSWORD: ${{ secrets.SIGNATURE_KEYSTORE_PASSWORD }}
+      SIGNATURE_KEY_ALIAS: ${{ secrets.SIGNATURE_KEY_ALIAS }}
+      SIGNATURE_KEY_PASSWORD: ${{ secrets.SIGNATURE_KEY_PASSWORD }}
+      SIGNING_KEYSTORE_B64: ${{ secrets.SIGNING_KEYSTORE_B64 }}
+
+      SIGNING_PUBLIC_CERT_PEM: ${{ vars.SIGNING_PUBLIC_CERT_PEM }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      - name: Restore server.jks from secret
+        run: |
+          mkdir -p src/main/resources
+          echo "$SERVER_KEYSTORE_B64" | base64 -d > src/main/resources/server.jks
+
+      - name: Restore signing.jks from secret
+        run: |
+          mkdir -p src/main/resources
+          echo "$SIGNING_KEYSTORE_B64" | base64 -d > src/main/resources/signing.jks
+
+      - name: Restore public signing certificate from variable
+        run: |
+          mkdir -p src/main/resources/public
+          printf "%s" "$SIGNING_PUBLIC_CERT_PEM" > src/main/resources/public/signing-cert.pem
+
+      - name: Build and test with Maven
+        run: mvn -B clean verify
+
+      - name: Package JAR
+        run: mvn -B package -DskipTests
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ziovpo-jar
+          path: target/*.jar
