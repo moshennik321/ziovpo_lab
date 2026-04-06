@@ -35,6 +35,8 @@ public class LicenseService {
     private final LicenseHistoryService licenseHistoryService;
     private final TicketService ticketService;
 
+    // ================= CREATE =================
+
     @Transactional
     public LicenseResponse createLicense(CreateLicenseRequest request, Long adminId) {
         Product product = productService.getProductOrFail(request.getProductId());
@@ -43,19 +45,16 @@ public class LicenseService {
         LicenseType type = licenseTypeService.getTypeOrFail(request.getTypeId());
 
         ApplicationUser owner = userRepository.findById(request.getOwnerId())
-                .orElseThrow(() -> new NotFoundException("Owner not found: " + request.getOwnerId()));
+                .orElseThrow(() -> new NotFoundException("Owner not found"));
 
         ApplicationUser admin = userRepository.findById(adminId)
-                .orElseThrow(() -> new NotFoundException("Admin not found: " + adminId));
+                .orElseThrow(() -> new NotFoundException("Admin not found"));
 
         License license = License.builder()
                 .code(licenseCodeGenerator.generateCode())
                 .product(product)
                 .type(type)
                 .owner(owner)
-                .user(null)
-                .firstActivationDate(null)
-                .endingDate(null)
                 .blocked(false)
                 .deviceCount(request.getDeviceCount())
                 .description(request.getDescription())
@@ -67,14 +66,17 @@ public class LicenseService {
                 saved,
                 admin,
                 LicenseHistoryStatus.CREATED,
-                "License created by admin"
+                "License created"
         );
 
         return toResponse(saved);
     }
 
+    // ================= ACTIVATE =================
+
     @Transactional
     public TicketResponse activateLicense(ActivateLicenseRequest request, Long userId) {
+
         License license = licenseRepository.findByCode(normalizeCode(request.getActivationKey()))
                 .orElseThrow(() -> new NotFoundException("License not found"));
 
@@ -84,38 +86,39 @@ public class LicenseService {
 
         productService.checkNotBlocked(license.getProduct());
 
-        ApplicationUser currentUser = userRepository.findById(userId)
-                .orElseThrow(() -> new NotFoundException("User not found: " + userId));
+        ApplicationUser user = userRepository.findById(userId)
+                .orElseThrow(() -> new NotFoundException("User not found"));
 
         if (license.getUser() != null && !license.getUser().getId().equals(userId)) {
             throw new ForbiddenOperationException("License belongs to another user");
         }
 
         Device device = deviceService.getOrCreateDevice(
-                currentUser,
+                user,
                 request.getDeviceName(),
                 request.getDeviceMac()
         );
 
+        // ===== FIRST ACTIVATION =====
         if (license.getUser() == null) {
-            license.setUser(currentUser);
+            license.setUser(user);
             license.setFirstActivationDate(OffsetDateTime.now());
-            license.setEndingDate(license.getFirstActivationDate()
-                    .plusDays(license.getType().getDefaultDurationInDays()));
+            license.setEndingDate(
+                    license.getFirstActivationDate()
+                            .plusDays(license.getType().getDefaultDurationInDays())
+            );
 
             licenseRepository.save(license);
 
-            if (!deviceLicenseRepository.existsByLicenseIdAndDeviceId(license.getId(), device.getId())) {
-                deviceLicenseRepository.save(DeviceLicense.builder()
-                        .license(license)
-                        .device(device)
-                        .activationDate(OffsetDateTime.now())
-                        .build());
-            }
+            deviceLicenseRepository.save(DeviceLicense.builder()
+                    .license(license)
+                    .device(device)
+                    .activationDate(OffsetDateTime.now())
+                    .build());
 
             licenseHistoryService.saveHistory(
                     license,
-                    currentUser,
+                    user,
                     LicenseHistoryStatus.ACTIVATED,
                     "First activation"
             );
@@ -123,15 +126,18 @@ public class LicenseService {
             return ticketService.buildTicketResponse(license, device);
         }
 
+        // ===== ALREADY ACTIVATED ON THIS DEVICE =====
         if (deviceLicenseRepository.existsByLicenseIdAndDeviceId(license.getId(), device.getId())) {
             return ticketService.buildTicketResponse(license, device);
         }
 
-        long currentCount = deviceLicenseRepository.countByLicenseId(license.getId());
-        if (currentCount >= license.getDeviceCount()) {
+        // ===== DEVICE LIMIT CHECK =====
+        long count = deviceLicenseRepository.countByLicenseId(license.getId());
+        if (count >= license.getDeviceCount()) {
             throw new ConflictException("Device limit reached");
         }
 
+        // ===== ADD NEW DEVICE =====
         deviceLicenseRepository.save(DeviceLicense.builder()
                 .license(license)
                 .device(device)
@@ -140,43 +146,54 @@ public class LicenseService {
 
         licenseHistoryService.saveHistory(
                 license,
-                currentUser,
+                user,
                 LicenseHistoryStatus.ACTIVATED,
-                "Activated on additional device"
+                "Activated on new device"
         );
 
         return ticketService.buildTicketResponse(license, device);
     }
 
+    // ================= CHECK =================
+
     @Transactional(readOnly = true)
     public TicketResponse checkLicense(CheckLicenseRequest request, Long userId) {
+
         Device device = deviceService.getDeviceOrFailByMac(request.getDeviceMac());
 
         if (!device.getUser().getId().equals(userId)) {
             throw new ForbiddenOperationException("Device belongs to another user");
         }
 
-        License license = licenseRepository.findActiveByDeviceUserAndProduct(
-                        request.getDeviceMac().trim().toUpperCase(),
-                        userId,
-                        request.getProductId(),
-                        OffsetDateTime.now()
-                )
-                .orElseThrow(() -> new NotFoundException("Active license not found"));
+        List<License> licenses = licenseRepository.findActiveLicenses(
+                request.getDeviceMac().trim().toUpperCase(),
+                userId,
+                request.getProductId(),
+                OffsetDateTime.now()
+        );
+
+        if (licenses.isEmpty()) {
+            throw new NotFoundException("Active license not found");
+        }
+
+        License license = licenses.get(0);
 
         return ticketService.buildTicketResponse(license, device);
     }
 
+    // ================= RENEW =================
+
     @Transactional
     public TicketResponse renewLicense(RenewLicenseRequest request, Long userId) {
+
         License license = licenseRepository.findByCode(normalizeCode(request.getActivationKey()))
                 .orElseThrow(() -> new NotFoundException("License not found"));
 
-        ApplicationUser currentUser = userRepository.findById(userId)
-                .orElseThrow(() -> new NotFoundException("User not found: " + userId));
+        ApplicationUser user = userRepository.findById(userId)
+                .orElseThrow(() -> new NotFoundException("User not found"));
 
         if (license.getUser() == null) {
-            throw new ConflictException("License has not been activated yet");
+            throw new ConflictException("License not activated");
         }
 
         if (!license.getUser().getId().equals(userId)) {
@@ -188,35 +205,41 @@ public class LicenseService {
         }
 
         OffsetDateTime now = OffsetDateTime.now();
-        OffsetDateTime endingDate = license.getEndingDate();
+        OffsetDateTime ending = license.getEndingDate();
 
-        boolean renewable = endingDate == null
-                || endingDate.isBefore(now)
-                || !endingDate.isAfter(now.plusDays(7));
+        boolean renewable = ending == null
+                || ending.isBefore(now)
+                || !ending.isAfter(now.plusDays(7));
 
         if (!renewable) {
-            throw new ConflictException("License renewal is not allowed yet");
+            throw new ConflictException("Too early to renew");
         }
 
-        OffsetDateTime baseDate = (endingDate == null || endingDate.isBefore(now)) ? now : endingDate;
-        license.setEndingDate(baseDate.plusDays(license.getType().getDefaultDurationInDays()));
+        OffsetDateTime base = (ending == null || ending.isBefore(now)) ? now : ending;
+
+        license.setEndingDate(
+                base.plusDays(license.getType().getDefaultDurationInDays())
+        );
+
         licenseRepository.save(license);
 
         licenseHistoryService.saveHistory(
                 license,
-                currentUser,
+                user,
                 LicenseHistoryStatus.RENEWED,
-                "License renewed"
+                "Renewed"
         );
 
-        List<DeviceLicense> activations = deviceLicenseRepository.findAllByLicenseId(license.getId());
-        if (activations.isEmpty()) {
-            throw new ConflictException("No activated device found for this license");
-        }
+        Device device = deviceLicenseRepository.findAllByLicenseId(license.getId())
+                .stream()
+                .findFirst()
+                .orElseThrow(() -> new ConflictException("No device"))
+                .getDevice();
 
-        Device device = activations.get(0).getDevice();
         return ticketService.buildTicketResponse(license, device);
     }
+
+    // ================= UTILS =================
 
     private LicenseResponse toResponse(License license) {
         return LicenseResponse.builder()
