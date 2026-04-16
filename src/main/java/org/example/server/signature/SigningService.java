@@ -19,16 +19,24 @@ public class SigningService {
     public String sign(Object payload) {
         try {
             byte[] canonicalBytes = jsonCanonicalizer.canonicalizeToUtf8Bytes(payload);
+            byte[] signedBytes = sign(canonicalBytes);
+            return Base64.getEncoder().encodeToString(signedBytes);
+        } catch (Exception e) {
+            throw new SignatureException("Failed to sign payload", e);
+        }
+    }
+
+    public byte[] sign(byte[] payloadBytes) {
+        try {
             PrivateKey privateKey = keyStoreService.getPrivateKey();
 
             Signature signature = Signature.getInstance(SIGNATURE_ALGORITHM);
             signature.initSign(privateKey);
-            signature.update(canonicalBytes);
+            signature.update(payloadBytes);
 
-            byte[] signedBytes = signature.sign();
-            return Base64.getEncoder().encodeToString(signedBytes);
+            return signature.sign();
         } catch (Exception e) {
-            throw new SignatureException("Failed to sign payload", e);
+            throw new SignatureException("Failed to sign binary payload", e);
         }
     }
 
